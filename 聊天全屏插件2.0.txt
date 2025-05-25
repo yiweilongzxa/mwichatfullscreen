@@ -1,0 +1,176 @@
+// ==UserScript==
+// @name         MilkyWayIdle 公屏聊天全屏按钮(fzchen)
+// @namespace    http://tampermonkey.net/
+// @version      1.9
+// @description  聊天全屏 + 两栏布局 + 始终保持最新的44条消息 + 仅首次显示动画
+// @match        https://www.milkywayidle.com/*
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    let messageCount = 44;
+    let fullscreenMode = false;
+    let observer = null;
+    let firstLoad = true;
+
+    function createFullscreenButton() {
+        const button = document.createElement('button');
+        button.textContent = '聊天全屏';
+        button.id = 'fullscreen-chat-toggle-btn';
+        button.style.cssText = `
+            position: fixed; top: 10px; right: 10px; z-index: 9999;
+            padding: 10px 15px; background-color: #007bff; color: white;
+            border: none; border-radius: 8px; cursor: pointer; font-size: 14px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); transition: background-color 0.3s;
+        `;
+
+        button.addEventListener('mouseenter', () => button.style.backgroundColor = '#0056b3');
+        button.addEventListener('mouseleave', () => button.style.backgroundColor = '#007bff');
+        button.addEventListener('click', toggleChatFullscreen);
+
+        if (!document.getElementById('fullscreen-chat-toggle-btn')) {
+            document.body.appendChild(button);
+        }
+    }
+
+    function toggleChatFullscreen() {
+        const chat = document.querySelector('[class^="ChatHistory_chatHistory"]');
+        const button = document.getElementById('fullscreen-chat-toggle-btn');
+
+        if (!chat) {
+            alert('❗ 找不到聊天区域');
+            return;
+        }
+
+        fullscreenMode = !chat.classList.contains('fullscreen-chat');
+
+        if (fullscreenMode) {
+            chat.classList.add('fullscreen-chat');
+            button.textContent = '退出全屏';
+            chat.offsetHeight; // 强制回流
+            setupMessageObserver(chat);
+            limitToLatestMessages(chat, true); // 首次加载使用动画
+            firstLoad = false;
+        } else {
+            chat.classList.remove('fullscreen-chat');
+            button.textContent = '聊天全屏';
+            disconnectMessageObserver();
+            showAllMessages(chat);
+            firstLoad = true; // 重置首次加载标志
+        }
+    }
+
+    function showAllMessages(chat) {
+        Array.from(chat.children).forEach(div => {
+            div.style.display = 'block';
+            div.style.opacity = '1';
+        });
+    }
+
+    function limitToLatestMessages(chat, useAnimation = false) {
+        const messages = Array.from(chat.children);
+        const excessCount = messages.length - messageCount;
+        
+        if (excessCount > 0) {
+            messages.slice(0, excessCount).forEach(msg => msg.remove());
+        }
+        
+        const visibleMessages = messages.slice(-messageCount);
+        messages.forEach(msg => msg.style.display = 'none');
+        
+        if (useAnimation) {
+            // 首次加载使用淡入动画
+            visibleMessages.forEach((msg, index) => {
+                msg.style.display = 'block';
+                msg.style.opacity = '0';
+                setTimeout(() => {
+                    msg.style.transition = 'opacity 0.3s ease';
+                    msg.style.opacity = '1';
+                }, 50 + index * 20);
+            });
+        } else {
+            // 非首次加载直接显示
+            visibleMessages.forEach(msg => {
+                msg.style.display = 'block';
+                msg.style.opacity = '1';
+            });
+        }
+    }
+
+    function setupMessageObserver(chat) {
+        disconnectMessageObserver();
+        
+        observer = new MutationObserver(mutations => {
+            mutations.forEach(mutation => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    limitToLatestMessages(chat, false); // 消息更新时不使用动画
+                }
+            });
+        });
+        
+        observer.observe(chat, { childList: true });
+    }
+
+    function disconnectMessageObserver() {
+        if (observer) {
+            observer.disconnect();
+            observer = null;
+        }
+    }
+
+    function injectStyles() {
+        const style = document.createElement('style');
+        style.textContent = `
+            [class^="ChatHistory_chatHistory"] > div {
+                margin-bottom: 6px; padding-bottom: 2px; font-size: 14px;
+                line-height: 1.4; word-wrap: break-word; white-space: pre-wrap;
+                word-break: break-word; user-select: text;
+            }
+
+            .fullscreen-chat {
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 100vw !important; height: 100vh !important;
+                background-color: #fff !important; z-index: 9998 !important;
+                overflow-y: hidden !important; padding: 20px; box-sizing: border-box;
+                color: #333 !important; column-count: 2; column-gap: 40px;
+            }
+
+            .fullscreen-chat > div {
+                color: #111 !important; break-inside: avoid; margin-bottom: 10px;
+                transition: opacity 0.3s ease;
+            }
+
+            #fullscreen-chat-toggle-btn {
+                position: fixed; top: 10px; right: 10px; z-index: 9999;
+                padding: 10px 15px; background-color: #007bff; color: white;
+                border: none; border-radius: 8px; cursor: pointer; font-size: 14px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); transition: background-color 0.3s;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function waitForChatWithObserver() {
+        const observer = new MutationObserver((mutations, obs) => {
+            const chat = document.querySelector('[class^="ChatHistory_chatHistory"]');
+            if (chat) {
+                injectStyles();
+                createFullscreenButton();
+                obs.disconnect();
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    window.addEventListener('resize', () => {
+        const chat = document.querySelector('[class^="ChatHistory_chatHistory"]');
+        if (chat && chat.classList.contains('fullscreen-chat')) {
+            limitToLatestMessages(chat, false); // 窗口调整时不使用动画
+        }
+    });
+
+    waitForChatWithObserver();
+})();
